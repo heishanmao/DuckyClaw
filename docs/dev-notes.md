@@ -23,8 +23,10 @@
 
 ## 2. 时钟 AI 模块
 
-- 开关：`CONFIG_ENABLE_APP_CLOCK_AI`（Kconfig，默认 n）；预设配置 `config/CLOCK_AI.config`，
-  复制为 `app_default.config` 后生效。
+- 开关：Kconfig 符号 `ENABLE_APP_CLOCK_AI`（默认 n；config 文件与 using.config 中写作
+  `CONFIG_ENABLE_APP_CLOCK_AI=y`，生成的 `tuya_kconfig.h` 剥离 `CONFIG_` 前缀，C 代码用
+  `#if defined(ENABLE_APP_CLOCK_AI)`）；预设配置 `config/CLOCK_AI.config`，复制为
+  `app_default.config` 后生效。
 - 代码：`src/app_clock.c` / `src/app_clock.h`。1s 定时器 → `tal_time_get_local_time_custom()`
   取本地时间（含时区/夏令时）→ `[clock]` 日志 + （AI 显示开启时）经
   `ai_ui_disp_msg(AI_UI_DISP_NOTIFICATION, ...)` 在状态栏显示 HH:MM:SS。

@@ -10,7 +10,8 @@
  *  - The status-bar notification path (AI_UI_DISP_NOTIFICATION) is the
  *    SDK-supported way for app code to show text without owning the screen.
  *    A full-screen clock page can be layered on top of ai_ui_page later.
- *  - Gate: CONFIG_ENABLE_APP_CLOCK_AI (see TuyaOpenClaw/Kconfig).
+ *  - Gate: ENABLE_APP_CLOCK_AI (Kconfig `config ENABLE_APP_CLOCK_AI`;
+ *    generated header tuya_kconfig.h strips the CONFIG_ prefix).
  *
  * @version 0.1
  * @copyright Copyright (c) 2026 TuyaOpenClaw (heishanmao). All Rights Reserved.
@@ -19,7 +20,7 @@
 #include "tal_api.h"
 #include "tal_time_service.h"
 
-#if defined(CONFIG_ENABLE_APP_CLOCK_AI)
+#if defined(ENABLE_APP_CLOCK_AI)
 
 #if defined(ENABLE_COMP_AI_DISPLAY) && (ENABLE_COMP_AI_DISPLAY == 1)
 #include "ai_ui_manage.h"
@@ -90,11 +91,11 @@ OPERATE_RET app_clock_init(void)
     return OPRT_OK;
 }
 
-#else /* !CONFIG_ENABLE_APP_CLOCK_AI */
+#else /* !ENABLE_APP_CLOCK_AI */
 
 OPERATE_RET app_clock_init(void)
 {
     return OPRT_OK;
 }
 
-#endif /* CONFIG_ENABLE_APP_CLOCK_AI */
+#endif /* ENABLE_APP_CLOCK_AI */

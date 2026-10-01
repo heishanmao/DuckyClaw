@@ -396,7 +396,7 @@ void user_main(void)
         PR_ERR("tuyaopen_claw_chat_init failed rt:%d", ret);
     }
 
-#if defined(CONFIG_ENABLE_APP_CLOCK_AI)
+#if defined(ENABLE_APP_CLOCK_AI)
     ret = app_clock_init();
     if (ret != OPRT_OK) {
         PR_ERR("app_clock_init failed rt:%d", ret);
