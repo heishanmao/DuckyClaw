@@ -87,18 +87,31 @@ static void __app_clock_weather_fetch(void *arg)
     }
     /* Best effort; failure only drops today's high/low range. */
     tuya_weather_get_today_high_low_temp(&high, &low);
+    /* Best effort; city name (province/city/area -> "city"). */
+    {
+        char province[32] = {0}, city[32] = {0}, area[32] = {0};
+
+        if (OPRT_OK == tuya_weather_get_city(province, sizeof(province),
+                                             city, sizeof(city),
+                                             area, sizeof(area)) &&
+            city[0] != '\0') {
+            snprintf(wi.city, sizeof(wi.city), "%s%s",
+                     city, (area[0] != '\0' && strcmp(area, city) != 0) ? area : "");
+        }
+    }
 
     wi.weather_code = cur.weather;
     wi.temperature  = cur.temp;
     wi.temp_high    = high;
     wi.temp_low     = low;
+    wi.humi         = cur.humi;
 
 #if defined(ENABLE_COMP_AI_DISPLAY) && (ENABLE_COMP_AI_DISPLAY == 1)
     ai_ui_disp_msg(AI_UI_DISP_CLOCK_UPDATE_WEATHER,
                    (uint8_t *)&wi, sizeof(UI_DISP_CLOCK_WEATHER_T));
 #endif
-    PR_NOTICE("[clock] weather code=%d temp=%dC high=%dC low=%dC",
-              cur.weather, cur.temp, high, low);
+    PR_NOTICE("[clock] weather code=%d temp=%dC high=%dC low=%dC humi=%d city=%s",
+              cur.weather, cur.temp, high, low, cur.humi, wi.city);
     sg_weather_busy = false;
 }
 
