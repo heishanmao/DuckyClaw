@@ -1,19 +1,20 @@
 /**
  * @file app_clock.c
- * @brief Clock AI skeleton: a 1-second timer that reads the Tuya time
- *        service, logs the local time, and (when the AI display is enabled)
- *        shows HH:MM:SS in the status-bar notification label.
+ * @brief Clock AI: a 1-second timer that reads the Tuya time service,
+ *        logs the local time, and pushes HH:MM:SS to the full-screen
+ *        clock page (AI_UI_DISP_CLOCK_UPDATE_TIME) when the AI display
+ *        is enabled.
  *
  * Design notes:
  *  - Uses tal_time_get_local_time_custom() so timezone/DST are handled by
  *    the Tuya time service after cloud time sync.
- *  - The status-bar notification path (AI_UI_DISP_NOTIFICATION) is the
- *    SDK-supported way for app code to show text without owning the screen.
- *    A full-screen clock page can be layered on top of ai_ui_page later.
+ *  - The full-screen clock page lives in ai_ui (wechat variant); this
+ *    module only feeds it via ai_ui_disp_msg(). Status-bar notification
+ *    is no longer used for the clock.
  *  - Gate: ENABLE_APP_CLOCK_AI (Kconfig `config ENABLE_APP_CLOCK_AI`;
  *    generated header tuya_kconfig.h strips the CONFIG_ prefix).
  *
- * @version 0.1
+ * @version 0.2
  * @copyright Copyright (c) 2026 TuyaOpenClaw (heishanmao). All Rights Reserved.
  */
 
@@ -27,7 +28,7 @@
 #endif
 
 #define APP_CLOCK_TICK_MS       1000
-#define APP_CLOCK_TIME_TEXT_LEN 24
+#define APP_CLOCK_TIME_TEXT_LEN 32
 
 static TIMER_ID sg_clock_timer  = NULL;
 static bool     sg_clock_running = false;
@@ -35,13 +36,19 @@ static bool     sg_clock_running = false;
 /**
  * @brief Format current local time as "HH:MM:SS YYYY-MM-DD".
  */
-static void __app_clock_format(char *buf, uint32_t buf_len)
+static void __app_clock_format(char *buf, uint32_t buf_len, POSIX_TM_S *out_tm)
 {
     POSIX_TM_S tm = {0};
 
     if (OPRT_OK != tal_time_get_local_time_custom(0, &tm)) {
         snprintf(buf, buf_len, "--:--:--");
+        if (out_tm != NULL) {
+            memset(out_tm, 0, sizeof(POSIX_TM_S));
+        }
         return;
+    }
+    if (out_tm != NULL) {
+        memcpy(out_tm, &tm, sizeof(POSIX_TM_S));
     }
     snprintf(buf, buf_len, "%02d:%02d:%02d %04d-%02d-%02d",
              tm.tm_hour, tm.tm_min, tm.tm_sec,
@@ -49,7 +56,7 @@ static void __app_clock_format(char *buf, uint32_t buf_len)
 }
 
 /**
- * @brief 1-second tick: log local time, push to status-bar notification.
+ * @brief 1-second tick: log local time, push to the full-screen clock page.
  */
 static void __app_clock_tick(TIMER_ID timer_id, void *arg)
 {
@@ -58,11 +65,17 @@ static void __app_clock_tick(TIMER_ID timer_id, void *arg)
     (void)timer_id;
     (void)arg;
 
-    __app_clock_format(full, sizeof(full));
+    __app_clock_format(full, sizeof(full), NULL);
     PR_NOTICE("[clock] %s", full);
 
 #if defined(ENABLE_COMP_AI_DISPLAY) && (ENABLE_COMP_AI_DISPLAY == 1)
-    ai_ui_disp_msg(AI_UI_DISP_NOTIFICATION, (uint8_t *)full, (int)strlen(full));
+    {
+        UI_DISP_CLOCK_TIME_T time_info = {0};
+
+        __app_clock_format(full, sizeof(full), &time_info.curr_time);
+        ai_ui_disp_msg(AI_UI_DISP_CLOCK_UPDATE_TIME,
+                       (uint8_t *)&time_info, sizeof(UI_DISP_CLOCK_TIME_T));
+    }
 #endif
 }
 
