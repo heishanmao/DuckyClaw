@@ -16,12 +16,17 @@
    3. TuyaOpen environment setup (uv / venv / toolchain) via export.ps1.
 
 .USAGE
-  .\build_win.ps1                   # build
-  .\build_win.ps1 flash -p COM9     # build + flash to a given port
-  .\build_win.ps1 monitor           # serial monitor (logs at 460800)
-  .\build_win.ps1 clean             # tos.py clean
+  & .\build_win.ps1                    # build
+  & .\build_win.ps1 flash -p COM9      # build + flash to a given port
+  & .\build_win.ps1 monitor            # serial monitor (logs at 460800)
+  & .\build_win.ps1 clean              # tos.py clean
 #>
-param([string]$Action = "build", [Parameter(ValueFromRemainingArguments = $true)][string[]]$ExtraArgs)
+param(
+    [string]$Action = "build",
+    [Alias("p")][string]$Port = "",
+    [Alias("b")][int]$Baud = 0,
+    [switch]$Debug
+)
 
 # NOTE: keep default $ErrorActionPreference (Continue). export.ps1 writes
 # native stderr lines that must NOT become terminating errors when redirected.
@@ -83,7 +88,10 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $buildDir "TuyaOpen\.cache") | Out-Null
     New-Item -ItemType File -Force -Path (Join-Path $buildDir "TuyaOpen\.cache\.dont_prompt_update_platform") | Out-Null
     Push-Location $buildDir
-    $tosArgs = @((Join-Path $buildDir "TuyaOpen\tos.py"), $Action) + $ExtraArgs
+    $tosArgs = @((Join-Path $buildDir "TuyaOpen\tos.py"), $Action)
+    if ($Port)    { $tosArgs += @('-p', $Port) }
+    if ($Baud)    { $tosArgs += @('-b', "$Baud") }
+    if ($Debug)   { $tosArgs += '-d' }
     & $env:OPEN_SDK_PYTHON $tosArgs
     $code = $LASTEXITCODE
     Pop-Location
