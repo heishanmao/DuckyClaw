@@ -55,6 +55,7 @@
 #include "ws_server.h"
 #include "acp_client.h"
 #include "agent_loop.h"
+#include "app_clock.h"
 
 #if defined(ENABLE_QRCODE) && (ENABLE_QRCODE == 1)
 #include "qrencode_print.h"
@@ -394,6 +395,13 @@ void user_main(void)
     if (ret != OPRT_OK) {
         PR_ERR("tuyaopen_claw_chat_init failed rt:%d", ret);
     }
+
+#if defined(CONFIG_ENABLE_APP_CLOCK_AI)
+    ret = app_clock_init();
+    if (ret != OPRT_OK) {
+        PR_ERR("app_clock_init failed rt:%d", ret);
+    }
+#endif
 
     ret = app_im_init();
     if (ret != OPRT_OK) {

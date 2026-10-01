@@ -41,4 +41,13 @@ rsource "./agent/Kconfig"
 rsource "./components/lua/Kconfig"
 rsource "./tools/Kconfig"
 
+    config ENABLE_APP_CLOCK_AI
+        bool "Clock AI: show HH:MM:SS on display status bar (1s tick)"
+        default n
+        help
+          Clock AI skeleton module: a 1-second timer reads the Tuya time
+          service, logs the local time, and (when the AI display is enabled)
+          shows HH:MM:SS in the status-bar notification label. A full-screen
+          clock page can be layered on top of ai_ui_page later.
+
 endmenu
