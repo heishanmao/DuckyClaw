@@ -145,5 +145,12 @@ foreach(_lib_hdir ai_mcp ai_agent)
     message(STATUS "[DC overlay] ${EXAMPLE_LIB} include path prepended: ${_DC_OVERLAY}/${_lib_hdir}/include")
 endforeach()
 
+# Let the ai_ui component (settings page, clock page) reach app-side headers
+# such as app_clock_modules.h kept under <app>/src.
+if(TARGET ai_ui)
+    target_include_directories(ai_ui BEFORE PUBLIC ${APP_PATH}/src)
+    message(STATUS "[DC overlay] ai_ui include path prepended: ${APP_PATH}/src")
+endif()
+
 _dc_overlay_source(ai_mcp   ai_mcp/src/ai_mcp_server.c)
 _dc_overlay_source(ai_agent ai_agent/src/ai_agent.c)

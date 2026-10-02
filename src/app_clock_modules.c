@@ -36,19 +36,23 @@
 #define APP_CLOCK_KV_DIM_ENABLE   "clock_dim_enable"
 #define APP_CLOCK_KV_DIM_START    "clock_dim_start"
 #define APP_CLOCK_KV_DIM_END      "clock_dim_end"
-#define APP_CLOCK_KV_DIM_LEVEL    "clock_dim_level"
+#define APP_CLOCK_KV_DIM_LEVEL    "clock_dim_level"  /* base brightness (user master, 5-100) */
+#define APP_CLOCK_KV_DIM_NIGHT    "clock_dim_night"  /* brightness while auto-dimming at night */
 #define APP_CLOCK_KV_DIM_WAKE     "clock_dim_wake"
 
 #define APP_CLOCK_DIM_DEF_ENABLE  "1"
 #define APP_CLOCK_DIM_DEF_START   "23:00"
 #define APP_CLOCK_DIM_DEF_END     "07:00"
-#define APP_CLOCK_DIM_DEF_LEVEL   "8"      /* 0 = off (black), 100 = max */
+#define APP_CLOCK_DIM_DEF_LEVEL   "100"    /* base brightness, slider-backed */
+#define APP_CLOCK_DIM_DEF_NIGHT   "5"      /* night dim level (low but readable) */
 #define APP_CLOCK_DIM_DEF_WAKE    "60"     /* seconds to stay bright after a tap */
+#define APP_CLOCK_DIM_MIN_LEVEL   5        /* slider floor: never go fully black */
 
 static int s_dim_enable       = 1;
 static int s_dim_start_min    = 23 * 60;
 static int s_dim_end_min      = 7 * 60;
-static int s_dim_level        = 8;
+static int s_dim_level        = 100;
+static int s_dim_night_level  = 5;
 static int s_dim_wake_s       = 60;
 static int s_dim_cur_level    = -1;    /* last backlight level actually applied */
 static int s_dim_force_level  = -1;    /* >=0 = CLI forced brightness override */
@@ -107,7 +111,7 @@ void app_clock_dim_get_state(int *level, int *mode)
     }
 }
 
-static void __mod_dim_init(void)
+static void __mod_dim_load_cfg(void)
 {
     char buf[24] = {0};
 
@@ -135,8 +139,16 @@ static void __mod_dim_init(void)
     if (OPRT_OK == app_kv_get_string(APP_CLOCK_KV_DIM_LEVEL,
                                      APP_CLOCK_DIM_DEF_LEVEL, buf, sizeof(buf))) {
         int v = atoi(buf);
-        if (v >= 0 && v <= 100) {
+        if (v >= APP_CLOCK_DIM_MIN_LEVEL && v <= 100) {
             s_dim_level = v;
+        }
+    }
+    buf[0] = '\0';
+    if (OPRT_OK == app_kv_get_string(APP_CLOCK_KV_DIM_NIGHT,
+                                     APP_CLOCK_DIM_DEF_NIGHT, buf, sizeof(buf))) {
+        int v = atoi(buf);
+        if (v >= 0 && v <= 100) {
+            s_dim_night_level = v;
         }
     }
     buf[0] = '\0';
@@ -147,16 +159,94 @@ static void __mod_dim_init(void)
             s_dim_wake_s = v;
         }
     }
+}
+
+static void __mod_dim_init(void)
+{
+    __mod_dim_load_cfg();
 
     lv_port_indev_set_touch_cb(app_clock_dim_notify_touch);
-    PR_NOTICE("[clock] dim init: enable=%d %02d:%02d-%02d:%02d level=%d wake=%ds",
+    PR_NOTICE("[clock] dim init: enable=%d %02d:%02d-%02d:%02d level=%d night=%d wake=%ds",
               s_dim_enable, s_dim_start_min / 60, s_dim_start_min % 60,
-              s_dim_end_min / 60, s_dim_end_min % 60, s_dim_level, s_dim_wake_s);
+              s_dim_end_min / 60, s_dim_end_min % 60, s_dim_level,
+              s_dim_night_level, s_dim_wake_s);
+}
+
+/* ---- Settings-page accessors (persist KV + apply immediately) ---- */
+
+void app_clock_dim_get_cfg(int *enable, int *start_min, int *end_min, int *level)
+{
+    if (enable)    *enable    = s_dim_enable;
+    if (start_min) *start_min = s_dim_start_min;
+    if (end_min)   *end_min   = s_dim_end_min;
+    if (level)     *level     = s_dim_level;
+}
+
+void app_clock_dim_reload(void)
+{
+    __mod_dim_load_cfg();
+    s_dim_force_level = -1;
+    s_dim_cur_level   = -1;   /* re-evaluate on next tick */
+}
+
+void app_clock_dim_set_enable(bool on)
+{
+    const char *v = on ? "1" : "0";
+    s_dim_enable = on ? 1 : 0;
+    app_kv_set_string(APP_CLOCK_KV_DIM_ENABLE, v);
+    s_dim_force_level = -1;
+    s_dim_cur_level   = -1;   /* re-evaluate on next tick */
+}
+
+void app_clock_dim_set_level(int level)
+{
+    char buf[8] = {0};
+
+    /* The slider is the user's master brightness control: clamp to the
+     * readable floor (5%) so the screen never goes fully black from UI. */
+    if (level < APP_CLOCK_DIM_MIN_LEVEL) {
+        level = APP_CLOCK_DIM_MIN_LEVEL;
+    }
+    if (level > 100) {
+        level = 100;
+    }
+    s_dim_level = level;
+    snprintf(buf, sizeof(buf), "%d", level);
+    app_kv_set_string(APP_CLOCK_KV_DIM_LEVEL, buf);
+    /* Apply immediately and treat the drag as a wake interaction: at night the
+     * brightness the user just chose is kept for the wake window, then the
+     * auto-dim (night level) takes over again. During the day the next tick
+     * simply keeps this value. */
+    s_dim_last_touch_ticks = s_dim_ticks;
+    __mod_dim_apply(level);
+}
+
+void app_clock_dim_preview_done(void)
+{
+    s_dim_cur_level = -1;   /* re-evaluate on next tick */
+}
+
+void app_clock_dim_set_period(const char *start, const char *end)
+{
+    int h = 0, m = 0;
+
+    if (start != NULL && sscanf(start, "%d:%d", &h, &m) == 2 &&
+        h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+        s_dim_start_min = h * 60 + m;
+        app_kv_set_string(APP_CLOCK_KV_DIM_START, start);
+    }
+    if (end != NULL && sscanf(end, "%d:%d", &h, &m) == 2 &&
+        h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+        s_dim_end_min = h * 60 + m;
+        app_kv_set_string(APP_CLOCK_KV_DIM_END, end);
+    }
+    s_dim_force_level = -1;
+    s_dim_cur_level   = -1;   /* re-evaluate on next tick */
 }
 
 static void __mod_dim_tick(void)
 {
-    int  target = 100;
+    int  target = s_dim_level;   /* base brightness = the slider's value */
     int  in_night = 0;
     POSIX_TM_S tm = {0};
 
@@ -183,9 +273,9 @@ static void __mod_dim_tick(void)
     if (in_night) {
         if (s_dim_wake_s > 0 &&
             (uint32_t)(s_dim_ticks - s_dim_last_touch_ticks) < (uint32_t)s_dim_wake_s) {
-            target = 100;   /* touch wake window */
+            target = s_dim_level;   /* touch wake window: back to user brightness */
         } else {
-            target = s_dim_level;
+            target = s_dim_night_level;   /* auto dim while sleeping */
         }
     }
 

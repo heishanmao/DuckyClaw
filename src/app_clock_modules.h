@@ -106,6 +106,45 @@ void app_clock_dim_test(bool on);
  */
 void app_clock_dim_get_state(int *level, int *mode);
 
+/**
+ * @brief DIM module: query persisted configuration for the settings page.
+ * @param[out] enable    0 = off, 1 = on (may be NULL)
+ * @param[out] start_min minutes since midnight of dim start (may be NULL)
+ * @param[out] end_min   minutes since midnight of dim end (may be NULL)
+ * @param[out] level     dim backlight level 0-100 (may be NULL)
+ */
+void app_clock_dim_get_cfg(int *enable, int *start_min, int *end_min, int *level);
+
+/**
+ * @brief DIM module: re-read all KV config (called after KV edits).
+ */
+void app_clock_dim_reload(void);
+
+/**
+ * @brief DIM module: enable/disable the night dim feature (persisted).
+ */
+void app_clock_dim_set_enable(bool on);
+
+/**
+ * @brief DIM module: set the night dim brightness 0-100 (persisted).
+ *        While the user is dragging the settings slider the value is
+ *        previewed immediately; call app_clock_dim_preview_done() on
+ *        slider release to hand control back to the auto logic.
+ */
+void app_clock_dim_set_level(int level);
+
+/**
+ * @brief DIM module: set the dim time window (persisted).
+ * @param[in] start "HH:MM" or NULL to keep current
+ * @param[in] end   "HH:MM" or NULL to keep current
+ */
+void app_clock_dim_set_period(const char *start, const char *end);
+
+/**
+ * @brief DIM module: end a brightness preview (slider released).
+ */
+void app_clock_dim_preview_done(void);
+
 #ifdef __cplusplus
 }
 #endif
