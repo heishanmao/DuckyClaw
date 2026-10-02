@@ -21,7 +21,7 @@
 #include "tal_api.h"
 #include "tal_time_service.h"
 #include "tal_workq_service.h"
-#include "tuya_weather.h"
+#include "app_clock_modules.h"
 
 #if defined(ENABLE_APP_CLOCK_AI)
 
@@ -31,14 +31,9 @@
 
 #define APP_CLOCK_TICK_MS           1000
 #define APP_CLOCK_TIME_TEXT_LEN     32
-#define APP_CLOCK_WEATHER_FIRST_TICK 30   /* first fetch ~30 s after boot */
-#define APP_CLOCK_WEATHER_INTERVAL  1800  /* then every 30 min */
 
 static TIMER_ID sg_clock_timer  = NULL;
 static bool     sg_clock_running = false;
-
-static uint32_t        sg_weather_tick = APP_CLOCK_WEATHER_FIRST_TICK;
-static volatile bool   sg_weather_busy = false;
 
 /**
  * @brief Format current local time as "HH:MM:SS YYYY-MM-DD".
@@ -63,60 +58,8 @@ static void __app_clock_format(char *buf, uint32_t buf_len, POSIX_TM_S *out_tm)
 }
 
 /**
- * @brief Fetch weather from the Tuya cloud and push it to the clock page.
- *
- * Runs on the low-priority workqueue (blocking cloud call is allowed);
- * triggered from the 1s tick every APP_CLOCK_WEATHER_INTERVAL.
- */
-static void __app_clock_weather_fetch(void *arg)
-{
-    WEATHER_CURRENT_CONDITIONS_T cur = {0};
-    UI_DISP_CLOCK_WEATHER_T wi = {0};
-    int high = 0;
-    int low  = 0;
-
-    (void)arg;
-
-    if (false == tuya_weather_allow_update()) {
-        sg_weather_busy = false;
-        return;
-    }
-    if (OPRT_OK != tuya_weather_get_current_conditions(&cur)) {
-        sg_weather_busy = false;
-        return;
-    }
-    /* Best effort; failure only drops today's high/low range. */
-    tuya_weather_get_today_high_low_temp(&high, &low);
-    /* Best effort; city name (province/city/area -> "city"). */
-    {
-        char province[32] = {0}, city[32] = {0}, area[32] = {0};
-
-        if (OPRT_OK == tuya_weather_get_city(province, sizeof(province),
-                                             city, sizeof(city),
-                                             area, sizeof(area)) &&
-            city[0] != '\0') {
-            snprintf(wi.city, sizeof(wi.city), "%s%s",
-                     city, (area[0] != '\0' && strcmp(area, city) != 0) ? area : "");
-        }
-    }
-
-    wi.weather_code = cur.weather;
-    wi.temperature  = cur.temp;
-    wi.temp_high    = high;
-    wi.temp_low     = low;
-    wi.humi         = cur.humi;
-
-#if defined(ENABLE_COMP_AI_DISPLAY) && (ENABLE_COMP_AI_DISPLAY == 1)
-    ai_ui_disp_msg(AI_UI_DISP_CLOCK_UPDATE_WEATHER,
-                   (uint8_t *)&wi, sizeof(UI_DISP_CLOCK_WEATHER_T));
-#endif
-    PR_NOTICE("[clock] weather code=%d temp=%dC high=%dC low=%dC humi=%d city=%s",
-              cur.weather, cur.temp, high, low, cur.humi, wi.city);
-    sg_weather_busy = false;
-}
-
-/**
- * @brief 1-second tick: log local time, push to the full-screen clock page.
+ * @brief 1-second tick: log local time, push to the full-screen clock page,
+ *        and drive the feature-module registry (weather, reminder, ...).
  */
 static void __app_clock_tick(TIMER_ID timer_id, void *arg)
 {
@@ -138,12 +81,8 @@ static void __app_clock_tick(TIMER_ID timer_id, void *arg)
     }
 #endif
 
-    /* Periodic weather refresh on the low-priority workqueue. */
-    if (0 == --sg_weather_tick && !sg_weather_busy) {
-        sg_weather_tick = APP_CLOCK_WEATHER_INTERVAL;
-        sg_weather_busy = true;
-        tal_workq_schedule(WORKQ_SYSTEM, __app_clock_weather_fetch, NULL);
-    }
+    /* Drive scheduled feature modules (weather fetch etc.). */
+    app_clock_modules_tick();
 }
 
 OPERATE_RET app_clock_init(void)
@@ -165,6 +104,8 @@ OPERATE_RET app_clock_init(void)
         PR_ERR("[clock] sw timer start failed rt:%d", rt);
         return rt;
     }
+
+    app_clock_modules_init();
 
     sg_clock_running = true;
     PR_NOTICE("[clock] Clock AI enabled (tick %d ms)", APP_CLOCK_TICK_MS);

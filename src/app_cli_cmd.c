@@ -20,6 +20,10 @@
 #include "tal_cli.h"
 #include "tal_kv.h"
 #include "tal_log.h"
+#include "tal_uart.h"
+#include "tal_workq_service.h"
+
+#include "lv_vendor.h"
 
 #include <stdbool.h>
 #include <stdarg.h>
@@ -64,6 +68,7 @@ static void cmd_cfg_set_qq_appid(int argc, char *argv[]);
 static void cmd_cfg_set_qq_secret(int argc, char *argv[]);
 static void cmd_cfg_set_proxy(int argc, char *argv[]);
 static void cmd_cfg_clear_proxy(int argc, char *argv[]);
+static void cmd_snap(int argc, char *argv[]);
 static void cli_clear_weixin_cfg_overrides_(void);
 
 /* ---------------------------------------------------------------------------
@@ -793,6 +798,93 @@ static void cmd_cfg_clear_proxy(int argc, char *argv[])
     tal_cli_echo("OK: proxy cleared");
 }
 
+/**
+ * @brief LVGL screen snapshot worker (runs on the system workqueue).
+ *
+ * Runs OFF the tiny CLI thread: lv_snapshot_take() is a heavyweight call
+ * (allocates a PSRAM draw buffer and re-renders the screen) and overflows
+ * the CLI task stack (observed HardFault "Fault on thread cli"). The CLI
+ * command only schedules this job and returns immediately.
+ *
+ * Wire protocol (over uart0 @115200):
+ *   "SNAP <w> <h> <stride>\n" then <stride>*<h> bytes of RGB565 pixel data.
+ *
+ * @param[in] arg unused
+ * @return none
+ */
+
+#if defined(ENABLE_COMP_AI_DISPLAY) && (ENABLE_COMP_AI_DISPLAY == 1)
+void ai_ui_wechat_clock_set_snap_pause(bool pause);
+#endif
+
+static void __snap_worker(void *arg)
+{
+    lv_draw_buf_t *buf = NULL;
+    char head[40] = {0};
+    const char *fail_msg = "ERR: snapshot failed\r\n";
+    const char *done_msg = "SNAP DONE\r\n";
+    int len;
+
+    (void)arg;
+
+    PR_NOTICE("[snap] begin (workq)");
+
+    /* Freeze clock-page redraws so the captured frame is not mid-update. */
+#if defined(ENABLE_COMP_AI_DISPLAY) && (ENABLE_COMP_AI_DISPLAY == 1)
+    ai_ui_wechat_clock_set_snap_pause(true);
+    tal_system_sleep(400);   /* let any in-flight redraw finish */
+#endif
+
+    lv_vendor_disp_lock();
+    buf = lv_snapshot_take(lv_screen_active(), LV_COLOR_FORMAT_RGB565);
+    lv_vendor_disp_unlock();
+
+#if defined(ENABLE_COMP_AI_DISPLAY) && (ENABLE_COMP_AI_DISPLAY == 1)
+    ai_ui_wechat_clock_set_snap_pause(false);
+#endif
+
+    if (buf == NULL) {
+        PR_ERR("[snap] lv_snapshot_take failed (NULL)");
+        tal_uart_write(TUYA_UART_NUM_0, (const uint8_t *)fail_msg,
+                       (uint32_t)strlen(fail_msg));
+        return;
+    }
+    PR_NOTICE("[snap] taken w=%u h=%u stride=%u",
+              (unsigned)buf->header.w, (unsigned)buf->header.h,
+              (unsigned)buf->header.stride);
+
+    len = snprintf(head, sizeof(head), "SNAP %u %u %u\n",
+                   (unsigned)buf->header.w, (unsigned)buf->header.h,
+                   (unsigned)buf->header.stride);
+    tal_uart_write(TUYA_UART_NUM_0, (const uint8_t *)head, (uint32_t)len);
+    tal_uart_write(TUYA_UART_NUM_0, buf->data,
+                   buf->header.stride * buf->header.h);
+    lv_draw_buf_destroy(buf);
+
+    tal_uart_write(TUYA_UART_NUM_0, (const uint8_t *)done_msg,
+                   (uint32_t)strlen(done_msg));
+    PR_NOTICE("[snap] done");
+}
+
+/**
+ * @brief Dump the current LVGL screen as raw RGB565 to the CLI UART.
+ *
+ * Schedules the actual snapshot on the system workqueue and returns
+ * immediately (the CLI task stack is too small for LVGL snapshotting).
+ *
+ * @param[in] argc CLI argc
+ * @param[in] argv CLI argv
+ * @return none
+ */
+static void cmd_snap(int argc, char *argv[])
+{
+    (void)argc;
+    (void)argv;
+
+    tal_workq_schedule(WORKQ_SYSTEM, __snap_worker, NULL);
+    PR_NOTICE("[snap] scheduled");
+}
+
 /* ---------------------------------------------------------------------------
  * Command table
  * --------------------------------------------------------------------------- */
@@ -818,6 +910,7 @@ static cli_cmd_t s_cli_cmd[] = {
     {.name = "cfg_set_qq_secret",     .help = "Set QQ Bot client_secret",               .func = cmd_cfg_set_qq_secret},
     {.name = "cfg_set_proxy",         .help = "Set outbound proxy",                     .func = cmd_cfg_set_proxy},
     {.name = "cfg_clear_proxy",       .help = "Clear outbound proxy",                   .func = cmd_cfg_clear_proxy},
+    {.name = "snap",                  .help = "Dump LVGL screen as raw RGB565 via UART", .func = cmd_snap},
 };
 
 /* ---------------------------------------------------------------------------
