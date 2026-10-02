@@ -79,6 +79,33 @@ void app_clock_module_request_fetch(CLOCK_MOD_E id);
  */
 const CLOCK_MOD_T *app_clock_modules_get(void);
 
+/**
+ * @brief DIM module: called by the touch input scan on every press
+ *        (wakes the screen from dimmed/off backlight).
+ */
+void app_clock_dim_notify_touch(void);
+
+/**
+ * @brief DIM module: force a fixed backlight level (0-100); pass -1 to
+ *        restore automatic night-time behavior.
+ * @param[in] level forced brightness or -1 for auto
+ */
+void app_clock_dim_force(int level);
+
+/**
+ * @brief DIM module: simulate night-time now (testing auto-dim and the
+ *        touch wake window without waiting for the configured hours).
+ * @param[in] on true = pretend night, false = back to real time
+ */
+void app_clock_dim_test(bool on);
+
+/**
+ * @brief DIM module: query current state for CLI / settings display.
+ * @param[out] level current applied backlight level (may be NULL)
+ * @param[out] mode   0 = automatic, 1 = forced by CLI (may be NULL)
+ */
+void app_clock_dim_get_state(int *level, int *mode);
+
 #ifdef __cplusplus
 }
 #endif

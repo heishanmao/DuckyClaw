@@ -18,14 +18,179 @@
 #include "app_clock_modules.h"
 #include "tal_log.h"
 #include "tal_workq_service.h"
+#include "tal_time_service.h"
 #include "tuya_weather.h"
+#include "app_base_config.h"
 
 #if defined(ENABLE_COMP_AI_DISPLAY) && (ENABLE_COMP_AI_DISPLAY == 1)
 #include "ai_ui_manage.h"
 #endif
 
+#include "lv_port_disp.h"
+#include "lv_port_indev.h"
+
 #define APP_CLOCK_MODULES_FIRST_TICK  30   /* first weather fetch ~30 s after boot */
 #define APP_CLOCK_MODULES_WEATHER_INT 1800 /* then every 30 min */
+
+/* ---- DIM (night backlight) module ---- */
+#define APP_CLOCK_KV_DIM_ENABLE   "clock_dim_enable"
+#define APP_CLOCK_KV_DIM_START    "clock_dim_start"
+#define APP_CLOCK_KV_DIM_END      "clock_dim_end"
+#define APP_CLOCK_KV_DIM_LEVEL    "clock_dim_level"
+#define APP_CLOCK_KV_DIM_WAKE     "clock_dim_wake"
+
+#define APP_CLOCK_DIM_DEF_ENABLE  "1"
+#define APP_CLOCK_DIM_DEF_START   "23:00"
+#define APP_CLOCK_DIM_DEF_END     "07:00"
+#define APP_CLOCK_DIM_DEF_LEVEL   "8"      /* 0 = off (black), 100 = max */
+#define APP_CLOCK_DIM_DEF_WAKE    "60"     /* seconds to stay bright after a tap */
+
+static int s_dim_enable       = 1;
+static int s_dim_start_min    = 23 * 60;
+static int s_dim_end_min      = 7 * 60;
+static int s_dim_level        = 8;
+static int s_dim_wake_s       = 60;
+static int s_dim_cur_level    = -1;    /* last backlight level actually applied */
+static int s_dim_force_level  = -1;    /* >=0 = CLI forced brightness override */
+static volatile int s_dim_test = 0;    /* 1 = CLI "dim test": simulate night now */
+static volatile uint32_t s_dim_ticks          = 0;
+static volatile uint32_t s_dim_last_touch_ticks = 0;
+
+static void __mod_dim_apply(int level)
+{
+    if (level == s_dim_cur_level) {
+        return;
+    }
+    s_dim_cur_level = level;
+    lv_display_t *disp = lv_port_get_lv_disp_by_name((char *)"display");
+    if (disp != NULL) {
+        disp_set_backlight(disp, (uint8_t)(level < 0 ? 0 : (level > 100 ? 100 : level)));
+        PR_NOTICE("[clock] dim backlight -> %d", level);
+    } else {
+        PR_WARN("[clock] dim: display handle not found");
+    }
+}
+
+/* Called from the touch input scan (any press). Safe from LVGL thread. */
+void app_clock_dim_notify_touch(void)
+{
+    s_dim_last_touch_ticks = s_dim_ticks;
+}
+
+/* CLI: force a fixed brightness (0-100). -1 restores automatic behavior. */
+void app_clock_dim_force(int level)
+{
+    s_dim_force_level = (level < 0) ? -1 : (level > 100 ? 100 : level);
+    s_dim_test = 0;
+    if (s_dim_force_level < 0) {
+        s_dim_cur_level = -1;   /* re-evaluate on next tick */
+    } else {
+        __mod_dim_apply(s_dim_force_level);
+    }
+}
+
+/* CLI: simulate night-time now (for testing auto-dim + touch wake). */
+void app_clock_dim_test(bool on)
+{
+    s_dim_test = on ? 1 : 0;
+    s_dim_force_level = -1;
+    s_dim_cur_level = -1;       /* re-evaluate on next tick */
+}
+
+void app_clock_dim_get_state(int *level, int *mode)
+{
+    if (level != NULL) {
+        *level = s_dim_cur_level;
+    }
+    if (mode != NULL) {
+        *mode = (s_dim_force_level >= 0) ? 1 : 0;
+    }
+}
+
+static void __mod_dim_init(void)
+{
+    char buf[24] = {0};
+
+    if (OPRT_OK == app_kv_get_string(APP_CLOCK_KV_DIM_ENABLE,
+                                     APP_CLOCK_DIM_DEF_ENABLE, buf, sizeof(buf))) {
+        s_dim_enable = (strcmp(buf, "0") != 0);
+    }
+    buf[0] = '\0';
+    if (OPRT_OK == app_kv_get_string(APP_CLOCK_KV_DIM_START,
+                                     APP_CLOCK_DIM_DEF_START, buf, sizeof(buf))) {
+        int h = 0, m = 0;
+        if (sscanf(buf, "%d:%d", &h, &m) == 2 && h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+            s_dim_start_min = h * 60 + m;
+        }
+    }
+    buf[0] = '\0';
+    if (OPRT_OK == app_kv_get_string(APP_CLOCK_KV_DIM_END,
+                                     APP_CLOCK_DIM_DEF_END, buf, sizeof(buf))) {
+        int h = 0, m = 0;
+        if (sscanf(buf, "%d:%d", &h, &m) == 2 && h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+            s_dim_end_min = h * 60 + m;
+        }
+    }
+    buf[0] = '\0';
+    if (OPRT_OK == app_kv_get_string(APP_CLOCK_KV_DIM_LEVEL,
+                                     APP_CLOCK_DIM_DEF_LEVEL, buf, sizeof(buf))) {
+        int v = atoi(buf);
+        if (v >= 0 && v <= 100) {
+            s_dim_level = v;
+        }
+    }
+    buf[0] = '\0';
+    if (OPRT_OK == app_kv_get_string(APP_CLOCK_KV_DIM_WAKE,
+                                     APP_CLOCK_DIM_DEF_WAKE, buf, sizeof(buf))) {
+        int v = atoi(buf);
+        if (v >= 0 && v <= 3600) {
+            s_dim_wake_s = v;
+        }
+    }
+
+    lv_port_indev_set_touch_cb(app_clock_dim_notify_touch);
+    PR_NOTICE("[clock] dim init: enable=%d %02d:%02d-%02d:%02d level=%d wake=%ds",
+              s_dim_enable, s_dim_start_min / 60, s_dim_start_min % 60,
+              s_dim_end_min / 60, s_dim_end_min % 60, s_dim_level, s_dim_wake_s);
+}
+
+static void __mod_dim_tick(void)
+{
+    int  target = 100;
+    int  in_night = 0;
+    POSIX_TM_S tm = {0};
+
+    s_dim_ticks++;
+
+    if (s_dim_force_level >= 0) {
+        /* CLI forced mode keeps the fixed brightness; nothing to re-evaluate. */
+        return;
+    }
+
+    if (s_dim_test) {
+        in_night = 1;   /* "dim test": pretend it is night right now */
+    } else if (s_dim_enable &&
+               OPRT_OK == tal_time_get_local_time_custom(0, &tm)) {
+        int now_min = tm.tm_hour * 60 + tm.tm_min;
+
+        if (s_dim_start_min <= s_dim_end_min) {
+            in_night = (now_min >= s_dim_start_min && now_min < s_dim_end_min);
+        } else {
+            in_night = (now_min >= s_dim_start_min || now_min < s_dim_end_min);
+        }
+    }
+
+    if (in_night) {
+        if (s_dim_wake_s > 0 &&
+            (uint32_t)(s_dim_ticks - s_dim_last_touch_ticks) < (uint32_t)s_dim_wake_s) {
+            target = 100;   /* touch wake window */
+        } else {
+            target = s_dim_level;
+        }
+    }
+
+    __mod_dim_apply(target);
+}
 
 /* ---------------------------------------------------------------------------
  * Module fetch implementations
@@ -97,11 +262,6 @@ static void __mod_ai_status_tick(void)
     /* TODO: show AI online / listening state in a clock-page corner */
 }
 
-static void __mod_dim_tick(void)
-{
-    /* TODO: after 22:00 / before 07:00, lower the backlight brightness */
-}
-
 /* ---------------------------------------------------------------------------
  * Registry
  * --------------------------------------------------------------------------- */
@@ -142,6 +302,7 @@ void app_clock_modules_init(void)
             s_modules[i].counter = s_modules[i].period_s;
         }
     }
+    __mod_dim_init();
     PR_NOTICE("[clock] modules registry ready (%d modules)", CLOCK_MOD_COUNT);
 }
 

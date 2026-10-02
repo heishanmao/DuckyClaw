@@ -7,6 +7,7 @@
  */
 
 #include "app_base_config.h"
+#include "app_clock_modules.h"
 #include "channels/discord_bot.h"
 #include "channels/feishu_bot.h"
 #include "channels/qqbot_channel.h"
@@ -69,6 +70,7 @@ static void cmd_cfg_set_qq_secret(int argc, char *argv[]);
 static void cmd_cfg_set_proxy(int argc, char *argv[]);
 static void cmd_cfg_clear_proxy(int argc, char *argv[]);
 static void cmd_snap(int argc, char *argv[]);
+static void cmd_dim(int argc, char *argv[]);
 static void cli_clear_weixin_cfg_overrides_(void);
 
 /* ---------------------------------------------------------------------------
@@ -886,6 +888,50 @@ static void cmd_snap(int argc, char *argv[])
 }
 
 /* ---------------------------------------------------------------------------
+ * DIM (night backlight) commands
+ * --------------------------------------------------------------------------- */
+/**
+ * @brief Control the clock DIM module.
+ *        dim             -> show current state
+ *        dim <level>     -> force backlight to 0-100
+ *        dim test        -> simulate night-time (auto-dim + touch wake test)
+ *        dim auto        -> restore automatic night-time behavior
+ */
+static void cmd_dim(int argc, char *argv[])
+{
+    int level = -1;
+    int mode  = 0;
+
+    if (argc >= 2 && strcmp(argv[1], "test") == 0) {
+        app_clock_dim_test(true);
+        cli_echof_("dim: night simulation ON (auto level %d)", level < 0 ? -1 : level);
+        cli_echof_("dim: touch the screen to wake, then it dims again");
+        return;
+    }
+
+    if (argc >= 2 && strcmp(argv[1], "auto") != 0) {
+        level = atoi(argv[1]);
+        if (level < 0 || level > 100) {
+            cli_echof_("Usage: dim [<0-100>|test|auto]  (brightness level / test / auto)");
+            return;
+        }
+        app_clock_dim_force(level);
+        cli_echof_("dim: forced backlight -> %d", level);
+        return;
+    }
+
+    if (argc >= 2 && strcmp(argv[1], "auto") == 0) {
+        app_clock_dim_force(-1);
+        cli_echof_("dim: automatic night-time behavior restored");
+        return;
+    }
+
+    app_clock_dim_get_state(&level, &mode);
+    cli_echof_("dim: backlight=%d mode=%s", level,
+               (mode == 1) ? "forced" : "auto");
+}
+
+/* ---------------------------------------------------------------------------
  * Command table
  * --------------------------------------------------------------------------- */
 static cli_cmd_t s_cli_cmd[] = {
@@ -911,6 +957,7 @@ static cli_cmd_t s_cli_cmd[] = {
     {.name = "cfg_set_proxy",         .help = "Set outbound proxy",                     .func = cmd_cfg_set_proxy},
     {.name = "cfg_clear_proxy",       .help = "Clear outbound proxy",                   .func = cmd_cfg_clear_proxy},
     {.name = "snap",                  .help = "Dump LVGL screen as raw RGB565 via UART", .func = cmd_snap},
+    {.name = "dim",                   .help = "dim [<0-100>|test|auto] backlight",      .func = cmd_dim},
 };
 
 /* ---------------------------------------------------------------------------
